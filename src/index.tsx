@@ -73,15 +73,31 @@ export default function App() {
     localStorage.setItem("arch_night", night.toString());
   }, [bgColor, textColor, lineSize, koreanFont, fontLink, night]);
 
-  const fetchDB = async () => {
+const fetchDB = async () => {
+    // 1. 접속 정보가 없거나 게스트면 실행 안 함
     if (!supabase || !user || user.id === 'guest') return;
-    const { data } = await supabase.from("entries").select("*");
-    if (data && data.length > 0) {
-      const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
-      setEntries(dbEntries);
-      localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
+
+    try {
+      // 2. DB에서 데이터를 읽어옵니다.
+      const { data, error } = await supabase.from("entries").select("*");
+
+      // 3. 에러가 나면 콘솔에 표시
+      if (error) {
+        console.error("DB 로드 에러:", error.message);
+        return;
+      }
+
+      // 4. DB에 데이터가 있을 때만 화면을 업데이트합니다.
+      // (이렇게 해야 브라우저마다 달랐던 내용이 하나로 합쳐집니다)
+      if (data && data.length > 0) {
+        const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
+        setEntries(dbEntries);
+        localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
+      }
+    } catch (err) {
+      console.error("연결 오류:", err);
     }
-  };
+  };;
 
   const handleLogin = async () => {
     if (!supabase) return alert("Supabase 설정 확인");
@@ -255,3 +271,4 @@ export default function App() {
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 root.render(<App />);
+
