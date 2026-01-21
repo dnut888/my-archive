@@ -15,6 +15,7 @@ try {
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
+  const [isInitialized, setIsInitialized] = useState(false); // 초기화 체크용
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
   const [openWork, setOpenWork] = useState<string | null>(null);
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
@@ -43,13 +44,23 @@ export default function App() {
   const [charFilter, setCharFilter] = useState<string>("");
 
   useEffect(() => {
+    // 1. 로컬 스토리지 먼저 로드
     const local = localStorage.getItem("archive_full_backup");
-    if (local) setEntries(JSON.parse(local));
+    if (local) {
+      setEntries(JSON.parse(local));
+    }
+    
+    // 2. 세션 체크
     if (supabase) {
       supabase.auth.getSession().then(({ data }: any) => {
-        setUser(data.session?.user ?? null);
-        if (data.session?.user) fetchDB();
+        if (data.session?.user) {
+          setUser(data.session.user);
+          fetchDB(); // 로그인 된 경우에만 DB 호출
+        }
+        setIsInitialized(true); // 이제 준비됨
       });
+    } else {
+      setIsInitialized(true);
     }
   }, []);
 
@@ -79,7 +90,6 @@ export default function App() {
     else { setUser(data.user); fetchDB(); }
   };
 
-  // 🔥 [긴급 수정] 저장 후 데이터가 사라지지 않도록 fetchDB를 강제 중단함
   const save = async () => {
     if (!work || !date || !text) return alert("필수 항목을 입력해주세요.");
     
@@ -90,22 +100,24 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 1. 화면 업데이트 (즉시 반영)
+    // 1. 화면 업데이트 (즉시 반영 및 로컬 저장)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    // 2. DB 저장 (백그라운드에서 처리, 화면 갱신은 하지 않음)
+    // 2. DB 저장 (백그라운드 처리, fetchDB로 화면 덮어쓰기 금지)
     if (supabase && user && user.id !== 'guest') {
       if (editingId) {
         const target = entries.find(e => e.id === editingId);
         supabase.from("entries").update({ content: payload }).eq('id', target.db_id).then(() => {});
       } else {
-        supabase.from("entries").insert([{ content: payload, user_id: user.id }]).then(() => {});
+        supabase.from("entries").insert([{ content: payload, user_id: user.id }]).then((res) => {
+          // 새로 만든 데이터의 db_id만 조용히 업데이트
+          if (res.data) fetchDB();
+        });
       }
     }
 
-    // 3. 폼 초기화 및 이동
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
   };
@@ -126,10 +138,13 @@ export default function App() {
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
-  if (!user && entries.length === 0) {
+  // 로그인 화면 조건 수정: 초기화 전에는 아무것도 안보여줌, 초기화 후 유저 없으면 로그인창 고정
+  if (!isInitialized) return null;
+
+  if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center font-serif" style={{ background: activeBg, color: activeText }}>
-        <div className="w-64 space-y-4 text-center">
+        <div className="w-64 space-y-4 text-center animate-in fade-in">
           <h1 className="text-3xl mb-8 font-bold tracking-tight">ARCHIVE</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
@@ -194,7 +209,7 @@ export default function App() {
                     {openEntryId === e.id && (
                       <div className="pt-2">
                         <div className="flex justify-between items-start gap-4">
-                          <div className="flex-1 leading-relaxed" style={{ fontSize: lineSize }}>{e.text}</div>
+                          <div className="flex-1 leading-relaxed cursor-pointer" onClick={() => setFocusEntry(e)} style={{ fontSize: lineSize }}>{e.text}</div>
                           <button onClick={() => {
                             const next = { ...e, favorite: !e.favorite };
                             setEntries(p => p.map(x => x.id === e.id ? next : x));
@@ -203,7 +218,7 @@ export default function App() {
                         {e.comment && <div className="mt-2 text-xs opacity-70 border-t border-current/5 pt-1">{e.comment}</div>}
                         <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase font-en">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time || ""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment || ""); }}>Edit</button>
-                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
+                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500 font-bold">Delete</button>
                         </div>
                       </div>
                     )}
