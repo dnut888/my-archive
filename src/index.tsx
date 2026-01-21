@@ -7,7 +7,7 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 let supabase: any = null;
 try {
-  if (SUPABASE_KEY && SUPABASE_KEY !== "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY") {
+  if (SUPABASE_KEY && SUPABASE_KEY !== "여기에_본인의_ANON_KEY_입력") {
     supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
   }
 } catch (e) { console.error(e); }
@@ -58,7 +58,7 @@ export default function App() {
   const fetchDB = async (currentUser = user) => {
     if (!supabase || !currentUser || currentUser.id === 'guest') return;
     const { data, error } = await supabase.from("entries").select("*");
-    if (!error && data) {
+    if (!error && data && data.length > 0) {
       const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
       setEntries(dbEntries);
       localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
@@ -67,18 +67,20 @@ export default function App() {
 
   const handleLogin = async () => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) alert(error.message);
+    if (error) alert("로그인 실패");
     else { setUser(data.user); fetchDB(data.user); }
   };
 
   const save = async () => {
-    if (!work || !date || !text) return alert("필수 항목 누락");
+    if (!work || !date || !text) return;
     const payload = {
       work, date, time, character, text, comment,
       id: editingId || Date.now(),
       keywords: keywords ? keywords.split(",").map(k => k.trim()) : [],
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
+
+    // 화면 즉시 반영 (동기화 딜레이 방지)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
@@ -94,6 +96,33 @@ export default function App() {
     }
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
+  };
+
+  const exportToHtml = () => {
+    const htmlContent = `
+      <html><head><meta charset="utf-8"><style>
+        body { background: ${activeBg}; color: ${activeText}; font-family: serif; padding: 40px; line-height: 1.6; }
+        .entry { margin-bottom: 40px; border-bottom: 1px solid rgba(0,0,0,0.1); padding-bottom: 20px; }
+        .title { font-weight: bold; font-size: 1.2em; }
+        .meta { opacity: 0.6; font-size: 0.8em; margin-bottom: 10px; }
+      </style></head><body>
+        <h1>Archive Backup</h1>
+        ${entries.map(e => `
+          <div class="entry">
+            <div class="title">${e.work}</div>
+            <div class="meta">${e.date} / ${e.character}</div>
+            <div class="text">${e.text}</div>
+            ${e.comment ? `<div class="meta" style="margin-top:10px italic">${e.comment}</div>` : ''}
+          </div>
+        `).join('')}
+      </body></html>
+    `;
+    const blob = new Blob([htmlContent], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `archive_${new Date().toLocaleDateString()}.html`;
+    a.click();
   };
 
   const grouped = useMemo(() => {
@@ -113,12 +142,12 @@ export default function App() {
   if (!isInitialized) return null;
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: activeBg, color: activeText }}>
-        <div className="w-64 space-y-4 text-center font-en">
-          <h1 className="text-3xl mb-8">Archive</h1>
-          <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
-          <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2">Login</button>
+      <div className="min-h-screen flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
+        <div className="w-64 space-y-4 text-center">
+          <h1 className="text-3xl mb-8 font-normal">Archive</h1>
+          <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+          <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs">LOGIN</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4">GUEST MODE</button>
         </div>
       </div>
@@ -128,23 +157,22 @@ export default function App() {
   return (
     <div className="min-h-screen px-5 py-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;1,400&display=swap');
         @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
-        .font-en { font-family: 'Crimson Text', serif !important; font-weight: 400 !important; letter-spacing: -0.5px !important; }
+        .font-en { font-family: 'Crimson Text', serif !important; font-weight: 400 !important; }
+        * { letter-spacing: -0.2px !important; }
       `}</style>
-      {fontLink && <link rel="stylesheet" href={fontLink} />}
 
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex justify-between items-center border-b border-current/10 pb-4">
           <div className="flex items-center gap-4">
             <h1 className="text-3xl font-en cursor-pointer" onClick={() => setMode("write")}>Archive</h1>
-            {/* 백업 버튼 복구 */}
-            <div className="flex gap-2 text-[10px] opacity-30 font-en">
-              <button onClick={() => { const blob = new Blob([JSON.stringify(entries)], {type:'application/json'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='archive_backup.json'; a.click(); }}>Export</button>
+            <div className="flex gap-2 text-[10px] opacity-30 font-en uppercase">
+              <button onClick={exportToHtml}>Html</button>
               <button onClick={() => { const input = document.createElement('input'); input.type='file'; input.onchange=(e:any)=>{ const file=e.target.files[0]; const reader=new FileReader(); reader.onload=(re:any)=>{ setEntries(JSON.parse(re.target.result)); }; reader.readAsText(file); }; input.click(); }}>Import</button>
             </div>
           </div>
-          <nav className="flex gap-4 text-sm font-en">
+          <nav className="flex gap-4 text-xs font-en uppercase">
             <button onClick={() => setMode("write")} className={mode === "write" ? "" : "opacity-30"}>Write</button>
             <button onClick={() => setMode("archive")} className={mode === "archive" ? "" : "opacity-30"}>Read</button>
             <button onClick={() => setMode("style")} className={mode === "style" ? "" : "opacity-30"}>Set</button>
@@ -160,8 +188,8 @@ export default function App() {
               <input placeholder="키워드(선택)" value={keywords} onChange={e => setKeywords(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
               <input placeholder="캐릭터" value={character} onChange={e => setCharacter(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm font-bold" />
             </div>
-            <textarea placeholder="문장" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '14px' }} />
-            <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-xs opacity-50 outline-none" />
+            <textarea placeholder="문장을 입력하세요" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '14px' }} />
+            <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-xs opacity-70 outline-none" />
             <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en">Save</button></div>
           </div>
         )}
@@ -173,13 +201,13 @@ export default function App() {
               <button onClick={() => setOnlyFavorite(!onlyFavorite)} className={onlyFavorite ? "text-yellow-500" : "opacity-20"}>★</button>
             </div>
             {Object.entries(grouped).map(([title, list]: any) => (
-              <section key={title}>
-                <button onClick={() => setOpenWork(openWork === title ? null : title)} className="flex items-baseline gap-2 font-bold w-full text-left py-2 border-b border-current/5">
-                  <span>{title}</span><span className="text-[10px] opacity-40 font-normal font-en">({list.length})</span>
+              <section key={title} className="space-y-1">
+                <button onClick={() => setOpenWork(openWork === title ? null : title)} className="flex items-baseline gap-2 font-bold w-full text-left py-1">
+                  <span>{title}</span><span className="text-[10px] opacity-40 font-normal">({list.length})</span>
                 </button>
                 {openWork === title && list.map((e: any) => (
-                  <div key={e.id} className="ml-2 pl-4 py-2 border-l border-current/10">
-                    <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-50">
+                  <div key={e.id} className="border-l border-current/10 ml-1 pl-4 py-1">
+                    <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-70">
                       {e.date} · {e.character}
                     </button>
                     {openEntryId === e.id && (
@@ -188,7 +216,7 @@ export default function App() {
                           <div className="flex-1 leading-relaxed cursor-pointer" onClick={() => setFocusEntry(e)} style={{ fontSize: lineSize }}>{e.text}</div>
                           <button onClick={() => { const next={...e, favorite:!e.favorite}; setEntries(p=>p.map(x=>x.id===e.id?next:x)); }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
                         </div>
-                        <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-en uppercase">
+                        <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase font-en">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time||""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment||""); }}>Edit</button>
                           <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
                         </div>
@@ -220,7 +248,6 @@ export default function App() {
         )}
       </div>
 
-      {/* 캡쳐용 팝업: 배경색 질문자님 설정값으로 변경 */}
       {focusEntry && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ backgroundColor: activeBg }} onClick={() => setFocusEntry(null)}>
           <div className="max-w-lg w-full p-10 space-y-6" style={{ color: activeText, fontFamily: koreanFont }}>
