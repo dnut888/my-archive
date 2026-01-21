@@ -2,13 +2,11 @@ import React, { useMemo, useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase 설정
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default function App() {
-  // --- 상태 ---
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
@@ -16,14 +14,12 @@ export default function App() {
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
   const [focusEntry, setFocusEntry] = useState<any | null>(null);
 
-  // 설정
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
   const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a");
   const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 14);
   const [koreanFont, setKoreanFont] = useState(() => localStorage.getItem("arch_font") || "BookkMyungjo");
   const [night, setNight] = useState(() => localStorage.getItem("arch_night") === "true");
 
-  // 입력
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [work, setWork] = useState("");
@@ -37,23 +33,16 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [onlyFavorite, setOnlyFavorite] = useState(false);
 
-  // --- 초기화 ---
   useEffect(() => {
-    // 1. 로컬 데이터 즉시 로드 (이게 가장 중요)
-    const saved = localStorage.getItem("archive_full_backup");
-    if (saved) {
-      try { setEntries(JSON.parse(saved)); } catch (e) { console.error("로컬 로드 실패", e); }
-    }
-
-    // 2. 로그인 상태 확인 (비동기)
-    const getSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    const local = localStorage.getItem("archive_full_backup");
+    if (local) setEntries(JSON.parse(local));
+    
+    supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
         fetchDB(session.user);
       }
-    };
-    getSession();
+    });
   }, []);
 
   const fetchDB = async (u: any) => {
@@ -66,19 +55,15 @@ export default function App() {
     }
   };
 
-  // --- 기능 ---
   const handleLogin = async () => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      alert("로그인 에러: " + error.message);
-      return;
-    }
+    if (error) return alert("로그인 실패: " + error.message);
     setUser(data.user);
     fetchDB(data.user);
   };
 
   const save = async () => {
-    if (!work || !text) return alert("작품명과 본문은 써야지 멍청아!"); // 스스로에게 하는 말입니다..
+    if (!work || !text) return alert("필수 항목을 입력해주세요.");
 
     const payload = {
       work, date, time, character, text, comment,
@@ -87,26 +72,22 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 1. 화면 및 로컬스토리지 즉시 반영 (DB 상관없이 무조건)
+    // 로컬 즉시 저장
     const next = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(next);
     localStorage.setItem("archive_full_backup", JSON.stringify(next));
 
-    // 2. DB 저장 시도 (실패해도 로컬엔 남아있음)
+    // DB 저장
     if (user && user.id !== 'guest') {
-      try {
-        if (editingId) {
-          const target = entries.find(e => e.id === editingId);
-          if (target?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
-        } else {
-          await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-        }
-      } catch (e) {
-        console.error("DB 저장 실패, 하지만 로컬엔 저장됨", e);
+      if (editingId) {
+        const target = entries.find(e => e.id === editingId);
+        if (target?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+      } else {
+        await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
       }
+      fetchDB(user);
     }
 
-    // 초기화
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
   };
@@ -121,7 +102,6 @@ export default function App() {
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
-  // --- 화면 렌더링 ---
   if (!user) {
     return (
       <div className="fixed inset-0 flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
@@ -129,8 +109,8 @@ export default function App() {
           <h1 className="text-4xl mb-12 font-normal tracking-widest uppercase">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest active:scale-95 transition-all">Login</button>
-          <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4 block w-full">GUEST MODE (Local Only)</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest active:opacity-50 transition-all">Login</button>
+          <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4 block w-full">GUEST MODE</button>
         </div>
       </div>
     );
