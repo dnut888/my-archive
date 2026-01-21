@@ -5,13 +5,11 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
 
-// Supabase 초기화 에러 방지
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
-  const [isInitialized, setIsInitialized] = useState(false);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
   const [openWork, setOpenWork] = useState<string | null>(null);
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
@@ -37,18 +35,16 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [onlyFavorite, setOnlyFavorite] = useState(false);
 
+  // 초기 로딩: 로컬 데이터 즉시 로드 & 세션 체크
   useEffect(() => {
-    // 1. 로컬 백업 먼저 로드
     const local = localStorage.getItem("archive_full_backup");
     if (local) setEntries(JSON.parse(local));
 
-    // 2. 세션 체크 및 데이터 동기화
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session?.user) {
-        setUser(data.session.user);
-        fetchDB(data.session.user);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        fetchDB(session.user);
       }
-      setIsInitialized(true);
     });
   }, []);
 
@@ -64,13 +60,13 @@ export default function App() {
 
   const handleLogin = async () => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return alert("로그인 실패: " + error.message);
+    if (error) return alert("실패: " + error.message);
     setUser(data.user);
     fetchDB(data.user);
   };
 
   const save = async () => {
-    if (!work || !date || !text) return alert("필수 정보를 입력하세요.");
+    if (!work || !text) return alert("내용을 입력하세요.");
     
     const payload = {
       work, date, time, character, text, comment,
@@ -79,62 +75,55 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // [중요] 화면에 즉시 반영 (Optimistic Update)
+    // 1. 화면에 즉시 반영 (가장 중요)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    // DB 동기화
+    // 2. DB 저장은 백그라운드에서 실행
     if (user && user.id !== 'guest') {
-      try {
-        if (editingId) {
-          const target = entries.find(e => e.id === editingId);
-          if (target?.db_id) {
-            await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
-          }
-        } else {
-          await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-        }
-        await fetchDB(user); // 최종 확인용
-      } catch (err) { console.error("DB Save Error:", err); }
+      if (editingId) {
+        const target = entries.find(e => e.id === editingId);
+        if (target?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+      } else {
+        await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
+      }
+      fetchDB(user); 
     }
 
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
   };
 
-  const handleBackup = (type: 'txt' | 'html' | 'json' | 'pdf') => {
+  const handleBackup = (type: string) => {
+    const content = JSON.stringify(entries, null, 2);
     if (type === 'json') {
-      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'archive.json'; a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], {type:'application/json'})); a.download='arch.json'; a.click();
     } else if (type === 'txt') {
       const txt = entries.map(e => `[${e.work}]\n${e.date} | ${e.character}\n${e.text}\n\n`).join('');
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' })); a.download = 'archive.txt'; a.click();
-    } else if (type === 'html' || type === 'pdf') {
-      if (type === 'pdf') { window.print(); return; }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], {type:'text/plain'})); a.download='arch.txt'; a.click();
+    } else if (type === 'html') {
       const html = `<html><body style="background:${activeBg};color:${activeText};padding:50px;font-family:serif;">${entries.map(e=>`<div><h2>${e.work}</h2><p>${e.date} | ${e.character}</p><p>${e.text}</p><hr/></div>`).join('')}</body></html>`;
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' })); a.download = 'archive.html'; a.click();
-    }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([html], {type:'text/html'})); a.download='arch.html'; a.click();
+    } else if (type === 'pdf') { window.print(); }
   };
 
   const grouped = useMemo(() => {
     let base = [...entries].sort((a, b) => b.id - a.id);
     if (onlyFavorite) base = base.filter(e => e.favorite);
-    if (query) base = base.filter(e => [e.text, e.work, e.character].some(v => v?.toLowerCase().includes(query.toLowerCase())));
+    if (query) base = base.filter(e => [e.text, e.work].some(v => v?.toLowerCase().includes(query.toLowerCase())));
     return base.reduce((acc: any, cur) => { acc[cur.work] = acc[cur.work] || []; acc[cur.work].push(cur); return acc; }, {});
   }, [entries, query, onlyFavorite]);
 
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
-  if (!isInitialized) return null;
-
-  // 로그인되지 않은 상태일 때 로그인창 강제 노출
+  // 로그인 안됐을 때 무조건 로그인창 리턴
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
         <div className="w-64 space-y-4 text-center">
-          <h1 className="text-3xl mb-8 font-normal uppercase tracking-widest">Archive</h1>
+          <h1 className="text-3xl mb-8 font-normal tracking-widest uppercase">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
           <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs">LOGIN</button>
@@ -168,44 +157,41 @@ export default function App() {
           <div className="space-y-4">
             <input placeholder="작품명" value={work} onChange={e => setWork(e.target.value)} className="w-full py-3 border-b bg-transparent font-bold text-xl outline-none" />
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <input placeholder="날짜 / 페이지" value={date} onChange={e => setDate(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
-              <input placeholder="시간 (선택)" value={time} onChange={e => setTime(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
-              <input placeholder="키워드 (선택)" value={keywords} onChange={e => setKeywords(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
+              <input placeholder="날짜" value={date} onChange={e => setDate(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
+              <input placeholder="시간" value={time} onChange={e => setTime(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
+              <input placeholder="키워드" value={keywords} onChange={e => setKeywords(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
               <input placeholder="캐릭터" value={character} onChange={e => setCharacter(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm font-bold" />
             </div>
             <textarea placeholder="문장을 입력하세요" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '14px' }} />
             <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-xs opacity-70 outline-none" />
-            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en uppercase tracking-widest">Save</button></div>
+            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en uppercase">Save</button></div>
           </div>
         )}
 
         {mode === "archive" && (
           <div className="space-y-4">
-            <div className="flex gap-3 items-center border-b border-current/5 pb-2">
+            <div className="flex gap-3 border-b border-current/5 pb-2">
               <input placeholder="Search..." value={query} onChange={e => setQuery(e.target.value)} className="flex-1 bg-transparent py-1 outline-none text-sm" />
               <button onClick={() => setOnlyFavorite(!onlyFavorite)} className={onlyFavorite ? "text-yellow-500" : "opacity-20"}>★</button>
             </div>
             {Object.entries(grouped).map(([title, list]: any) => (
               <section key={title} className="space-y-1">
                 <button onClick={() => setOpenWork(openWork === title ? null : title)} className="flex items-baseline gap-2 font-bold border-b border-current/5 w-full text-left py-1">
-                  <span>{title}</span><span className="text-[10px] opacity-40 font-normal font-en">({list.length})</span>
+                  <span>{title}</span><span className="text-[10px] opacity-40 font-en">({list.length})</span>
                 </button>
                 {openWork === title && list.map((e: any) => (
                   <div key={e.id} className="ml-1 pl-4 py-1">
                     <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-70">
-                      {e.date} {e.time && `· ${e.time}`} · {e.character}
+                      {e.date} · {e.character}
                     </button>
                     {openEntryId === e.id && (
                       <div className="pt-2">
                         <div className="flex justify-between items-start gap-4">
                           <div className="flex-1 leading-relaxed cursor-pointer" onClick={() => setFocusEntry(e)} style={{ fontSize: lineSize }}>{e.text}</div>
-                          <button onClick={() => { 
-                            const next = { ...e, favorite: !e.favorite }; 
-                            setEntries(p => p.map(x => x.id === e.id ? next : x)); 
-                          }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
+                          <button onClick={() => { const n={...e, favorite:!e.favorite}; setEntries(p=>p.map(x=>x.id===e.id?n:x)); }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
                         </div>
-                        <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase font-en">
-                          <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time || ""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment || ""); }}>Edit</button>
+                        <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold font-en uppercase">
+                          <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time||""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment||""); }}>Edit</button>
                           <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
                         </div>
                       </div>
@@ -218,10 +204,10 @@ export default function App() {
         )}
 
         {mode === "style" && (
-          <div className="space-y-6 py-4 max-w-sm">
+          <div className="space-y-6 max-w-sm">
             <div className="space-y-1 font-en"><label className="text-[10px] uppercase font-bold opacity-50">Colors</label>
-              <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" />
-              <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" />
+              <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
+              <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
             </div>
             <div className="space-y-1 font-en"><label className="text-[10px] uppercase font-bold opacity-50">Typography</label>
               <input type="range" min="12" max="24" value={lineSize} onChange={e => setLineSize(Number(e.target.value))} className="w-full accent-current mb-2" />
@@ -250,12 +236,8 @@ export default function App() {
       {focusEntry && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-10" style={{ backgroundColor: activeBg }} onClick={() => setFocusEntry(null)}>
           <div className="max-w-2xl w-full space-y-12 text-center" style={{ color: activeText, fontFamily: koreanFont }}>
-            <div className="leading-relaxed whitespace-pre-wrap" style={{ fontSize: lineSize + 6 }}>
-              {focusEntry.text}
-            </div>
-            <div className="text-sm opacity-50 font-en tracking-tight">
-              {focusEntry.work} | {focusEntry.date} | {focusEntry.character}
-            </div>
+            <div className="leading-relaxed whitespace-pre-wrap" style={{ fontSize: lineSize + 6 }}>{focusEntry.text}</div>
+            <div className="text-sm opacity-50 font-en tracking-tight">{focusEntry.work} | {focusEntry.date} | {focusEntry.character}</div>
           </div>
         </div>
       )}
