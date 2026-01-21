@@ -5,12 +5,8 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
 
-let supabase: any = null;
-try {
-  if (SUPABASE_KEY && SUPABASE_KEY !== "여기에_본인의_ANON_KEY_입력") {
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-  }
-} catch (e) { console.error(e); }
+// Supabase 초기화 에러 방지
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -42,76 +38,82 @@ export default function App() {
   const [onlyFavorite, setOnlyFavorite] = useState(false);
 
   useEffect(() => {
+    // 1. 로컬 백업 먼저 로드
     const local = localStorage.getItem("archive_full_backup");
     if (local) setEntries(JSON.parse(local));
-    if (supabase) {
-      supabase.auth.getSession().then(({ data }: any) => {
-        if (data.session?.user) { setUser(data.session.user); fetchDB(data.session.user); }
-        setIsInitialized(true);
-      });
-    } else { setIsInitialized(true); }
+
+    // 2. 세션 체크 및 데이터 동기화
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session?.user) {
+        setUser(data.session.user);
+        fetchDB(data.session.user);
+      }
+      setIsInitialized(true);
+    });
   }, []);
 
-  const fetchDB = async (currentUser = user) => {
-    if (!supabase || !currentUser || currentUser.id === 'guest') return;
-    try {
-      const { data, error } = await supabase.from("entries").select("*");
-      if (!error && data) {
-        const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
-        setEntries(dbEntries);
-        localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
-      }
-    } catch (e) { console.error(e); }
+  const fetchDB = async (currentUser: any) => {
+    if (!currentUser || currentUser.id === 'guest') return;
+    const { data, error } = await supabase.from("entries").select("*");
+    if (!error && data) {
+      const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
+      setEntries(dbEntries);
+      localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
+    }
   };
 
   const handleLogin = async () => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) alert("실패: " + error.message);
-    else { setUser(data.user); fetchDB(data.user); }
+    if (error) return alert("로그인 실패: " + error.message);
+    setUser(data.user);
+    fetchDB(data.user);
   };
 
   const save = async () => {
-    if (!work || !date || !text) return alert("필수 항목 입력");
+    if (!work || !date || !text) return alert("필수 정보를 입력하세요.");
+    
     const payload = {
       work, date, time, character, text, comment,
       id: editingId || Date.now(),
       keywords: keywords ? keywords.split(",").map(k => k.trim()).filter(Boolean) : [],
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
+
+    // [중요] 화면에 즉시 반영 (Optimistic Update)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    if (supabase && user && user.id !== 'guest') {
-      if (editingId) {
-        const target = entries.find(e => e.id === editingId);
-        await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
-      } else {
-        await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-      }
-      fetchDB();
+    // DB 동기화
+    if (user && user.id !== 'guest') {
+      try {
+        if (editingId) {
+          const target = entries.find(e => e.id === editingId);
+          if (target?.db_id) {
+            await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+          }
+        } else {
+          await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
+        }
+        await fetchDB(user); // 최종 확인용
+      } catch (err) { console.error("DB Save Error:", err); }
     }
+
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
   };
 
   const handleBackup = (type: 'txt' | 'html' | 'json' | 'pdf') => {
-    const content = JSON.stringify(entries, null, 2);
     if (type === 'json') {
-      const blob = new Blob([content], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'archive.json'; a.click();
+      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'archive.json'; a.click();
     } else if (type === 'txt') {
       const txt = entries.map(e => `[${e.work}]\n${e.date} | ${e.character}\n${e.text}\n\n`).join('');
-      const blob = new Blob([txt], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'archive.txt'; a.click();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' })); a.download = 'archive.txt'; a.click();
     } else if (type === 'html' || type === 'pdf') {
+      if (type === 'pdf') { window.print(); return; }
       const html = `<html><body style="background:${activeBg};color:${activeText};padding:50px;font-family:serif;">${entries.map(e=>`<div><h2>${e.work}</h2><p>${e.date} | ${e.character}</p><p>${e.text}</p><hr/></div>`).join('')}</body></html>`;
-      const blob = new Blob([html], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      if (type === 'pdf') window.print();
-      else { const a = document.createElement('a'); a.href = url; a.download = 'archive.html'; a.click(); }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' })); a.download = 'archive.html'; a.click();
     }
   };
 
@@ -126,14 +128,16 @@ export default function App() {
   const activeText = night ? "#e5e5e5" : textColor;
 
   if (!isInitialized) return null;
+
+  // 로그인되지 않은 상태일 때 로그인창 강제 노출
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center font-serif" style={{ background: activeBg, color: activeText }}>
+      <div className="min-h-screen flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
         <div className="w-64 space-y-4 text-center">
-          <h1 className="text-3xl mb-8 font-normal font-en uppercase tracking-widest">Archive</h1>
+          <h1 className="text-3xl mb-8 font-normal uppercase tracking-widest">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-en">LOGIN</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs">LOGIN</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4">GUEST MODE</button>
         </div>
       </div>
@@ -171,7 +175,7 @@ export default function App() {
             </div>
             <textarea placeholder="문장을 입력하세요" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '14px' }} />
             <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-xs opacity-70 outline-none" />
-            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en">SAVE</button></div>
+            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en uppercase tracking-widest">Save</button></div>
           </div>
         )}
 
@@ -187,7 +191,7 @@ export default function App() {
                   <span>{title}</span><span className="text-[10px] opacity-40 font-normal font-en">({list.length})</span>
                 </button>
                 {openWork === title && list.map((e: any) => (
-                  <div key={e.id} className="ml-1 pl-4 py-1"> {/* 왼쪽 선 삭제 */}
+                  <div key={e.id} className="ml-1 pl-4 py-1">
                     <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-70">
                       {e.date} {e.time && `· ${e.time}`} · {e.character}
                     </button>
@@ -195,7 +199,10 @@ export default function App() {
                       <div className="pt-2">
                         <div className="flex justify-between items-start gap-4">
                           <div className="flex-1 leading-relaxed cursor-pointer" onClick={() => setFocusEntry(e)} style={{ fontSize: lineSize }}>{e.text}</div>
-                          <button onClick={() => { const next = { ...e, favorite: !e.favorite }; setEntries(p => p.map(x => x.id === e.id ? next : x)); }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
+                          <button onClick={() => { 
+                            const next = { ...e, favorite: !e.favorite }; 
+                            setEntries(p => p.map(x => x.id === e.id ? next : x)); 
+                          }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
                         </div>
                         <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase font-en">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time || ""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment || ""); }}>Edit</button>
@@ -227,10 +234,9 @@ export default function App() {
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
-            {/* 백업 버튼들 */}
-            <div className="pt-4 space-y-2 border-t border-current/10">
-              <label className="text-[10px] uppercase font-bold opacity-50 font-en">Backup</label>
-              <div className="flex gap-2 text-[10px] font-en font-bold uppercase">
+            <div className="pt-4 space-y-2 border-t border-current/10 font-en">
+              <label className="text-[10px] uppercase font-bold opacity-50">Backup</label>
+              <div className="flex gap-2 text-[10px] font-bold uppercase">
                 <button onClick={()=>handleBackup('txt')} className="px-2 py-1 border border-current/20 rounded">TXT</button>
                 <button onClick={()=>handleBackup('html')} className="px-2 py-1 border border-current/20 rounded">HTML</button>
                 <button onClick={()=>handleBackup('json')} className="px-2 py-1 border border-current/20 rounded">JSON</button>
@@ -241,7 +247,6 @@ export default function App() {
         )}
       </div>
 
-      {/* 캡쳐용 팝업 (요청하신 형식으로 수정) */}
       {focusEntry && (
         <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-10" style={{ backgroundColor: activeBg }} onClick={() => setFocusEntry(null)}>
           <div className="max-w-2xl w-full space-y-12 text-center" style={{ color: activeText, fontFamily: koreanFont }}>
