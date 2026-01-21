@@ -2,142 +2,175 @@ import React, { useMemo, useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
-// ⚠️ 여기에 본인의 정보를 넣으세요. 만약 틀려도 화면은 나옵니다.
-const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co"; 
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY"; 
+// ⚠️ 본인의 Supabase Key를 입력해주세요.
+const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
 
-// [안전 장치] 키가 없거나 틀리면 null로 처리해서 앱이 죽는 걸 방지함
 let supabase: any = null;
 try {
-  if (SUPABASE_URL && SUPABASE_KEY && SUPABASE_KEY !== "여기에_본인의_ANON_KEY_입력") {
+  if (SUPABASE_KEY && SUPABASE_KEY !== "여기에_본인의_ANON_KEY_입력") {
     supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
   }
-} catch (e) {
-  console.error("Supabase 연결 실패 (화면은 띄움):", e);
-}
+} catch (e) { console.error(e); }
 
 export default function App() {
-  // --- [상태 관리] ---
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
-  const [bgColor, setBgColor] = useState("#f5f5f2");
-  const [textColor, setTextColor] = useState("#3a3a3a");
-  const [lineSize, setLineSize] = useState(16);
+  
+  // 입력 상태
   const [work, setWork] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [character, setCharacter] = useState("");
   const [text, setText] = useState("");
-  const [keywords, setKeywords] = useState("");
-  const [openEntryId, setOpenEntryId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // 디자인 상태
+  const [bgColor, setBgColor] = useState("#f5f5f2");
+  const [lineSize, setLineSize] = useState(16);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  // --- [데이터 로드 (안전 모드)] ---
+  // 1. 초기 데이터 로드 (로컬 -> DB 순서로 안전하게)
   useEffect(() => {
-    // Supabase가 연결되었을 때만 실행
+    // 일단 로컬에 저장된 게 있다면 먼저 보여줌 (오프라인/에러 방지)
+    const localData = localStorage.getItem("my_archive_data");
+    if (localData) setEntries(JSON.parse(localData));
+
     if (supabase) {
       supabase.auth.getSession().then(({ data }: any) => {
         setUser(data.session?.user ?? null);
-        if (data.session?.user) fetchData();
+        if (data.session?.user) fetchFromDB();
       });
-    } else {
-      console.log("DB 연결 없이 디자인만 보여주는 모드입니다.");
     }
   }, []);
 
-  const fetchData = async () => {
+  const fetchFromDB = async () => {
     if (!supabase) return;
-    const { data } = await supabase.from("entries").select("*");
+    const { data, error } = await supabase.from("entries").select("*");
     if (data) {
-      setEntries(data.map((d: any) => ({ ...d.content, db_id: d.id, id: d.content.id || d.id })));
+      const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
+      setEntries(dbEntries);
+      localStorage.setItem("my_archive_data", JSON.stringify(dbEntries));
     }
   };
 
+  // 2. 가장 중요한 [저장] 기능 - 로컬에 먼저 박고 DB로 보냄
+  const save = async () => {
+    if (!work || !text) return alert("내용을 입력해주세요.");
+
+    const newEntry = {
+      id: editingId || Date.now(),
+      work, date, time, character, text,
+      favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
+    };
+
+    // [Step 1] 일단 내 브라우저(로컬)에 즉시 저장 (절대 안 날아감)
+    let updatedEntries;
+    if (editingId) {
+      updatedEntries = entries.map(e => e.id === editingId ? newEntry : e);
+    } else {
+      updatedEntries = [newEntry, ...entries];
+    }
+    setEntries(updatedEntries);
+    localStorage.setItem("my_archive_data", JSON.stringify(updatedEntries));
+
+    // [Step 2] 로그인 상태라면 DB에 동기화
+    if (supabase && user) {
+      if (editingId) {
+        const target = entries.find(e => e.id === editingId);
+        await supabase.from("entries").update({ content: newEntry }).eq('id', target.db_id);
+      } else {
+        await supabase.from("entries").insert([{ content: newEntry, user_id: user.id }]);
+      }
+      fetchFromDB(); // DB와 싱크 맞춤
+    }
+
+    // 초기화
+    setWork(""); setDate(""); setTime(""); setCharacter(""); setText("");
+    setEditingId(null);
+    setMode("archive");
+  };
+
   const handleLogin = async () => {
-    if (!supabase) { alert("Supabase 키를 코드에 입력해주세요."); return; }
+    if (!supabase) return alert("Key를 입력해주세요.");
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) alert("로그인 실패");
-    else { setUser(data.user); fetchData(); }
+    else { setUser(data.user); fetchFromDB(); }
   };
 
-  const save = async () => {
-    if (!supabase || !user) { alert("DB 연결 또는 로그인이 필요합니다."); return; }
-    const payload = { work, date, time, character, text, id: Date.now(), favorite: false };
-    await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-    setWork(""); setText("");
-    fetchData();
-  };
+  // 3. 디자인 가공 (원본 스타일)
+  const grouped = useMemo(() => entries.reduce((acc: any, cur) => {
+    acc[cur.work] = acc[cur.work] || [];
+    acc[cur.work].push(cur);
+    return acc;
+  }, {}), [entries]);
 
-  // --- [디자인 렌더링 (원본)] ---
-  const activeBg = bgColor; 
-  const activeText = textColor;
-
-  // 1. Supabase 키가 없을 때 (화면 테스트용)
-  if (!supabase) {
+  if (!user && entries.length === 0) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-10 space-y-4">
-        <h1 className="text-2xl font-bold">⚠️ 화면 복구 성공</h1>
-        <p>현재 화면이 보인다면 코드는 정상입니다.</p>
-        <p>하지만 <strong>Supabase KEY</strong>가 코드에 입력되지 않았습니다.</p>
-        <p className="text-sm bg-white p-4 rounded border">const SUPABASE_KEY = "여기에_키를_넣으세요";</p>
-      </div>
-    );
-  }
-
-  // 2. 로그인 화면 (디자인 유지)
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center font-serif" style={{ backgroundColor: activeBg, color: activeText }}>
-        <div className="space-y-4 text-center w-64">
-          <h1 className="text-3xl mb-6">ARCHIVE</h1>
-          <input className="block w-full border-b border-black/20 bg-transparent py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
-          <input className="block w-full border-b border-black/20 bg-transparent py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full py-2 mt-4 border border-black/20 rounded-full text-xs hover:bg-black hover:text-white transition-all">ENTER</button>
+      <div className="min-h-screen flex items-center justify-center bg-[#f5f5f2] font-serif">
+        <div className="w-64 space-y-4 text-center">
+          <h1 className="text-3xl italic mb-10">Archive</h1>
+          <input className="w-full bg-transparent border-b border-black/20 py-2 outline-none" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+          <input className="w-full bg-transparent border-b border-black/20 py-2 outline-none" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
+          <button onClick={handleLogin} className="w-full py-3 bg-black text-white rounded-full text-xs tracking-widest">LOGIN</button>
+          <button onClick={() => setUser({id: 'guest'})} className="text-[10px] opacity-40 underline mt-4 block w-full text-center">로그인 없이 사용하기 (로컬저장)</button>
         </div>
       </div>
     );
   }
 
-  // 3. 메인 화면 (원본 디자인)
   return (
-    <div className="min-h-screen px-5 py-8" style={{ backgroundColor: activeBg, color: activeText }}>
-       {/* 폰트/스타일 강제 주입 */}
-      <style>{`
-        @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
-        body { font-family: 'BookkMyungjo', serif; }
-      `}</style>
-
-      <div className="max-w-4xl mx-auto space-y-10">
-        <header className="flex justify-between items-baseline">
-          <h1 className="text-3xl italic font-serif">Archive</h1>
-          <div className="space-x-4 text-sm opacity-50">
-            <button onClick={()=>setMode("write")} className={mode==="write"?"font-bold opacity-100":""}>Write</button>
-            <button onClick={()=>setMode("archive")} className={mode==="archive"?"font-bold opacity-100":""}>List</button>
-          </div>
+    <div className="min-h-screen px-6 py-10 transition-all" style={{ backgroundColor: bgColor, fontFamily: 'serif' }}>
+      <div className="max-w-4xl mx-auto space-y-12">
+        <header className="flex justify-between items-baseline border-b border-black/5 pb-4">
+          <h1 className="text-4xl italic font-bold cursor-pointer" onClick={()=>setMode("write")}>Archive</h1>
+          <nav className="space-x-6 text-sm">
+            <button onClick={()=>setMode("write")} className={mode==="write" ? "font-bold" : "opacity-30"}>Write</button>
+            <button onClick={()=>setMode("archive")} className={mode==="archive" ? "font-bold" : "opacity-30"}>Read</button>
+          </nav>
         </header>
 
         {mode === "write" && (
           <div className="space-y-6 animate-in fade-in">
-            <input placeholder="작품 제목" value={work} onChange={e=>setWork(e.target.value)} className="w-full text-xl border-b border-current/10 bg-transparent py-2 font-bold outline-none" />
+            <input placeholder="작품명" value={work} onChange={e=>setWork(e.target.value)} className="w-full text-2xl font-bold bg-transparent border-b border-black/10 py-2 outline-none" />
             <div className="grid grid-cols-2 gap-4">
-               <input placeholder="날짜" value={date} onChange={e=>setDate(e.target.value)} className="border-b border-current/10 bg-transparent py-2 outline-none" />
-               <input placeholder="캐릭터" value={character} onChange={e=>setCharacter(e.target.value)} className="border-b border-current/10 bg-transparent py-2 outline-none font-bold" />
+              <input placeholder="날짜" value={date} onChange={e=>setDate(e.target.value)} className="bg-transparent border-b border-black/10 py-2 outline-none" />
+              <input placeholder="캐릭터" value={character} onChange={e=>setCharacter(e.target.value)} className="bg-transparent border-b border-black/10 py-2 outline-none font-bold" />
             </div>
-            <textarea placeholder="내용을 입력하세요" value={text} onChange={e=>setText(e.target.value)} className="w-full h-40 resize-none border-none bg-transparent text-lg leading-relaxed outline-none" />
-            <button onClick={save} className="rounded-full border border-current px-6 py-2 text-xs hover:bg-black hover:text-white transition-all">SAVE</button>
+            <textarea placeholder="문장을 기록하세요..." value={text} onChange={e=>setText(e.target.value)} className="w-full h-64 bg-transparent border-none outline-none text-lg leading-relaxed resize-none" style={{ fontSize: lineSize }} />
+            <div className="flex justify-end">
+              <button onClick={save} className="px-10 py-3 bg-black text-white rounded-full text-xs font-bold tracking-widest hover:opacity-80 transition-all">
+                {editingId ? "UPDATE" : "SAVE"}
+              </button>
+            </div>
           </div>
         )}
 
         {mode === "archive" && (
-          <div className="space-y-8 animate-in fade-in">
-            {entries.length === 0 && <p className="opacity-40 italic">저장된 기록이 없습니다.</p>}
-            {entries.map(e => (
-               <div key={e.id} className="border-l-2 border-current/10 pl-4 py-2 hover:border-current transition-colors">
-                  <p className="whitespace-pre-wrap leading-relaxed mb-2">{e.text}</p>
-                  <p className="text-xs opacity-40">{e.work} · {e.character}</p>
-               </div>
+          <div className="space-y-10 animate-in fade-in">
+            {Object.entries(grouped).map(([title, list]: any) => (
+              <div key={title} className="space-y-4">
+                <h2 className="text-xl font-bold italic border-b border-black/5 pb-1">{title}</h2>
+                {list.map((e: any) => (
+                  <div key={e.id} className="group border-l-2 border-black/5 pl-4 py-2 hover:border-black transition-all">
+                    <p className="text-lg leading-relaxed opacity-80 mb-2">{e.text}</p>
+                    <div className="flex justify-between items-center text-[10px] opacity-30 uppercase tracking-widest">
+                      <span>{e.date} · {e.character}</span>
+                      <div className="space-x-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setCharacter(e.character); setText(e.text); }}>Edit</button>
+                        <button onClick={async () => {
+                          const updated = entries.filter(item => item.id !== e.id);
+                          setEntries(updated);
+                          localStorage.setItem("my_archive_data", JSON.stringify(updated));
+                          if(supabase && user && e.db_id) await supabase.from("entries").delete().eq('id', e.db_id);
+                        }} className="text-red-500">Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ))}
           </div>
         )}
