@@ -2,24 +2,28 @@ import React, { useMemo, useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
+// Supabase 설정
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [entries, setEntries] = useState<any[]>([]);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
   const [openWork, setOpenWork] = useState<string | null>(null);
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
   const [focusEntry, setFocusEntry] = useState<any | null>(null);
 
+  // 설정
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
   const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a");
   const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 14);
   const [koreanFont, setKoreanFont] = useState(() => localStorage.getItem("arch_font") || "BookkMyungjo");
   const [night, setNight] = useState(() => localStorage.getItem("arch_night") === "true");
 
+  // 입력 필드
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [work, setWork] = useState("");
@@ -33,21 +37,23 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [onlyFavorite, setOnlyFavorite] = useState(false);
 
+  // 초기 로드: 세션 체크
   useEffect(() => {
-    const local = localStorage.getItem("archive_full_backup");
-    if (local) setEntries(JSON.parse(local));
-    
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
         fetchDB(session.user);
       }
+      setLoading(false);
     });
   }, []);
 
   const fetchDB = async (u: any) => {
-    if (!u || u.id === 'guest') return;
-    const { data, error } = await supabase.from("entries").select("*");
+    const { data, error } = await supabase
+      .from("entries")
+      .select("*")
+      .order('created_at', { ascending: false });
+    
     if (!error && data) {
       const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
       setEntries(dbEntries);
@@ -63,7 +69,8 @@ export default function App() {
   };
 
   const save = async () => {
-    if (!work || !text) return alert("필수 항목을 입력해주세요.");
+    if (!work || !text) return alert("필수 항목 입력 누락");
+    if (!user) return alert("로그인이 필요합니다.");
 
     const payload = {
       work, date, time, character, text, comment,
@@ -72,28 +79,27 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 로컬 즉시 저장
-    const next = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
-    setEntries(next);
-    localStorage.setItem("archive_full_backup", JSON.stringify(next));
-
-    // DB 저장
-    if (user && user.id !== 'guest') {
+    try {
       if (editingId) {
         const target = entries.find(e => e.id === editingId);
-        if (target?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+        if (target?.db_id) {
+          await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+        }
       } else {
         await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
       }
+      // 저장 후 다시 불러오기 (연동 보장)
       fetchDB(user);
+      
+      setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
+      setEditingId(null); setMode("archive");
+    } catch (e) {
+      alert("DB 저장 오류가 발생했습니다.");
     }
-
-    setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
-    setEditingId(null); setMode("archive");
   };
 
   const grouped = useMemo(() => {
-    let base = [...entries].sort((a, b) => b.id - a.id);
+    let base = [...entries];
     if (onlyFavorite) base = base.filter(e => e.favorite);
     if (query) base = base.filter(e => [e.text, e.work, e.character].some(v => v?.toLowerCase().includes(query.toLowerCase())));
     return base.reduce((acc: any, cur) => { acc[cur.work] = acc[cur.work] || []; acc[cur.work].push(cur); return acc; }, {});
@@ -102,6 +108,9 @@ export default function App() {
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
+  if (loading) return null;
+
+  // 유저가 없으면 무조건 로그인 창 노출
   if (!user) {
     return (
       <div className="fixed inset-0 flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
@@ -109,8 +118,7 @@ export default function App() {
           <h1 className="text-4xl mb-12 font-normal tracking-widest uppercase">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest active:opacity-50 transition-all">Login</button>
-          <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4 block w-full">GUEST MODE</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest">Login</button>
         </div>
       </div>
     );
@@ -170,18 +178,18 @@ export default function App() {
                       <div className="pt-3">
                         <div className="flex justify-between items-start gap-4">
                           <div className="flex-1 leading-relaxed cursor-pointer" onClick={() => setFocusEntry(e)} style={{ fontSize: lineSize }}>{e.text}</div>
-                          <button onClick={() => { 
+                          <button onClick={async () => { 
                             const n={...e, favorite:!e.favorite}; 
-                            setEntries(prev => prev.map(x => x.id === e.id ? n : x));
+                            await supabase.from("entries").update({ content: n }).eq('id', e.db_id);
+                            fetchDB(user);
                           }} className={e.favorite ? "text-yellow-500" : "opacity-20"}>★</button>
                         </div>
                         <div className="flex gap-4 mt-4 text-[10px] opacity-40 font-bold font-en uppercase">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time||""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment||""); }}>Edit</button>
-                          <button onClick={() => {
+                          <button onClick={async () => {
                             if(confirm("삭제하시겠습니까?")) {
-                              const n = entries.filter(x => x.id !== e.id);
-                              setEntries(n);
-                              localStorage.setItem("archive_full_backup", JSON.stringify(n));
+                              await supabase.from("entries").delete().eq('id', e.db_id);
+                              fetchDB(user);
                             }
                           }} className="text-red-500">Delete</button>
                         </div>
@@ -199,12 +207,6 @@ export default function App() {
              <div className="space-y-1 font-en"><label className="text-[10px] uppercase font-bold opacity-50">Colors</label>
               <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
               <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
-            </div>
-            <div className="flex items-center justify-between py-2 border-b border-current/10 font-en">
-              <span className="text-xs font-bold uppercase">Night Mode</span>
-              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
-                <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
-              </button>
             </div>
             <button onClick={() => { supabase.auth.signOut(); setUser(null); }} className="text-[10px] font-en uppercase font-bold opacity-40 border border-current/20 px-2 py-1 rounded">Logout</button>
           </div>
