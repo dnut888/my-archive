@@ -2,12 +2,13 @@ import React, { useMemo, useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
+// 1. Supabase 설정 (키와 URL은 그대로 유지)
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 export default function App() {
+  // --- 상태 관리 ---
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
@@ -15,12 +16,14 @@ export default function App() {
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
   const [focusEntry, setFocusEntry] = useState<any | null>(null);
 
+  // 설정 상태 (LocalStorage 우선)
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
   const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a");
   const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 14);
   const [koreanFont, setKoreanFont] = useState(() => localStorage.getItem("arch_font") || "BookkMyungjo");
   const [night, setNight] = useState(() => localStorage.getItem("arch_night") === "true");
 
+  // 입력 필드 상태
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [work, setWork] = useState("");
@@ -34,14 +37,24 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [onlyFavorite, setOnlyFavorite] = useState(false);
 
+  // --- 초기화 로직 ---
   useEffect(() => {
+    // 1. 로컬 백업에서 데이터를 먼저 즉시 불러옴 (로그인 전에도 데이터는 보여야 함)
     const local = localStorage.getItem("archive_full_backup");
-    if (local) setEntries(JSON.parse(local));
+    if (local) {
+      try { setEntries(JSON.parse(local)); } catch (e) { console.error(e); }
+    }
+
+    // 2. 로그인 세션 체크
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) { setUser(session.user); fetchDB(session.user); }
+      if (session?.user) {
+        setUser(session.user);
+        fetchDB(session.user);
+      }
     });
   }, []);
 
+  // DB 데이터 불러오기
   const fetchDB = async (u: any) => {
     if (!u || u.id === 'guest') return;
     const { data, error } = await supabase.from("entries").select("*");
@@ -52,34 +65,55 @@ export default function App() {
     }
   };
 
+  // --- 주요 기능 ---
   const handleLogin = async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return alert("실패: " + error.message);
-    setUser(data.user); fetchDB(data.user);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      setUser(data.user);
+      fetchDB(data.user);
+    } catch (err: any) {
+      alert("로그인 실패: " + err.message);
+    }
   };
 
   const save = async () => {
     if (!work || !text) return alert("내용을 입력해주세요.");
+
+    // 새로운 데이터 객체 생성
     const payload = {
       work, date, time, character, text, comment,
       id: editingId || Date.now(),
       keywords: keywords ? keywords.split(",").map(k => k.trim()).filter(Boolean) : [],
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
-    const next = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
-    setEntries(next);
-    localStorage.setItem("archive_full_backup", JSON.stringify(next));
+
+    // [중요] 1. 즉시 로컬 저장 및 화면 업데이트 (서버 응답 기다리지 않음)
+    const updatedEntries = editingId 
+      ? entries.map(e => e.id === editingId ? payload : e) 
+      : [payload, ...entries];
+    
+    setEntries(updatedEntries);
+    localStorage.setItem("archive_full_backup", JSON.stringify(updatedEntries));
+
+    // [중요] 2. 서버 DB 저장 (백그라운드 처리)
     if (user && user.id !== 'guest') {
       if (editingId) {
-        const t = entries.find(e => e.id === editingId);
-        if (t?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', t.db_id);
-      } else { await supabase.from("entries").insert([{ content: payload, user_id: user.id }]); }
-      fetchDB(user);
+        const target = entries.find(e => e.id === editingId);
+        if (target?.db_id) await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
+      } else {
+        await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
+      }
+      fetchDB(user); // 서버와 동기화
     }
+
+    // 입력창 초기화
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
-    setEditingId(null); setMode("archive");
+    setEditingId(null);
+    setMode("archive");
   };
 
+  // --- 화면 구성 ---
   const grouped = useMemo(() => {
     let base = [...entries].sort((a, b) => b.id - a.id);
     if (onlyFavorite) base = base.filter(e => e.favorite);
@@ -90,14 +124,15 @@ export default function App() {
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
+  // 로그인 창 (유저가 없을 때 무조건 노출)
   if (!user) {
     return (
       <div className="fixed inset-0 flex items-center justify-center font-en" style={{ background: activeBg, color: activeText }}>
         <div className="w-64 space-y-6 text-center">
-          <h1 className="text-4xl mb-10 font-normal tracking-widest uppercase font-en">Archive</h1>
+          <h1 className="text-4xl mb-10 font-normal tracking-widest uppercase">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest active:opacity-50">Login</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-3 text-xs uppercase tracking-widest active:bg-current active:text-white transition-all">Login</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4 block w-full">GUEST MODE</button>
         </div>
       </div>
@@ -165,7 +200,14 @@ export default function App() {
                         </div>
                         <div className="flex gap-4 mt-4 text-[10px] opacity-40 font-bold font-en uppercase">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time||""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment||""); }}>Edit</button>
-                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
+                          <button onClick={() => {
+                            if(confirm("삭제하시겠습니까?")) {
+                              const next = entries.filter(x => x.id !== e.id);
+                              setEntries(next);
+                              localStorage.setItem("archive_full_backup", JSON.stringify(next));
+                              if (user.id !== 'guest' && e.db_id) supabase.from("entries").delete().eq('id', e.db_id);
+                            }
+                          }} className="text-red-500">Delete</button>
                         </div>
                       </div>
                     )}
@@ -179,12 +221,12 @@ export default function App() {
         {mode === "style" && (
           <div className="space-y-6 max-w-sm">
              <div className="space-y-1 font-en"><label className="text-[10px] uppercase font-bold opacity-50">Colors</label>
-              <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
-              <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
+              <input value={bgColor} onChange={e => {setBgColor(e.target.value); localStorage.setItem("arch_bg", e.target.value);}} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
+              <input value={textColor} onChange={e => {setTextColor(e.target.value); localStorage.setItem("arch_text", e.target.value);}} className="w-full bg-transparent border-b border-current/20 py-1 outline-none text-xs" />
             </div>
             <div className="flex items-center justify-between py-2 border-b border-current/10 font-en">
               <span className="text-xs font-bold uppercase">Night Mode</span>
-              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
+              <button onClick={() => {setNight(!night); localStorage.setItem("arch_night", String(!night));}} className={`w-10 h-5 rounded-full relative ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
