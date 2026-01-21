@@ -23,7 +23,7 @@ export default function App() {
 
   // --- [Style / Theme] ---
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
-  const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#222222"); // 글씨 선명하게 상향
+  const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a"); // 더 진하게 조정
   const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 16);
   const [koreanFont, setKoreanFont] = useState(() => localStorage.getItem("arch_font") || "BookkMyungjo");
   const [fontLink, setFontLink] = useState(() => localStorage.getItem("arch_font_link") || "");
@@ -46,7 +46,6 @@ export default function App() {
   const [onlyFavorite, setOnlyFavorite] = useState(false);
   const [charFilter, setCharFilter] = useState<string>("");
 
-  // 1. 초기 로드 및 로그인 체크
   useEffect(() => {
     const local = localStorage.getItem("archive_full_backup");
     if (local) setEntries(JSON.parse(local));
@@ -59,7 +58,6 @@ export default function App() {
     }
   }, []);
 
-  // 스타일 설정 즉시 로컬 저장
   useEffect(() => {
     localStorage.setItem("arch_bg", bgColor);
     localStorage.setItem("arch_text", textColor);
@@ -80,7 +78,7 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    if (!supabase) return alert("Supabase Key가 필요합니다.");
+    if (!supabase) return alert("Supabase Key를 입력하세요.");
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) alert("로그인 실패: " + error.message);
     else { setUser(data.user); fetchDB(); }
@@ -99,7 +97,7 @@ export default function App() {
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    if (supabase && user) {
+    if (supabase && user && user.id !== 'guest') {
       if (editingId) {
         const target = entries.find(e => e.id === editingId);
         await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
@@ -112,7 +110,6 @@ export default function App() {
     setEditingId(null); setMode("archive");
   };
 
-  // --- [Logic 복구] ---
   const works = useMemo(() => Array.from(new Set(entries.map(e => e.work))).filter(Boolean), [entries]);
   const characters = useMemo(() => Array.from(new Set(entries.map(e => e.character))).filter(Boolean), [entries]);
   const filtered = useMemo(() => {
@@ -129,10 +126,18 @@ export default function App() {
     return acc;
   }, {}), [filtered]);
 
-  const activeBg = night ? "#1a1a1a" : bgColor;
-  const activeText = night ? "#dddddd" : textColor;
+  const exportFile = (type: "json" | "txt") => {
+    const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `archive.${type}`;
+    a.click();
+  };
 
-  // 1. 로그인 화면 (복구)
+  const activeBg = night ? "#1a1a1a" : bgColor;
+  const activeText = night ? "#e5e5e5" : textColor;
+
+  // 1. 로그인 화면 복구
   if (!user && entries.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center font-serif" style={{ background: activeBg, color: activeText }}>
@@ -159,7 +164,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen px-5 py-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
+    <div className="min-h-screen px-5 py-6 transition-colors duration-300" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
       <style>{`
         @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
         * { letter-spacing: 0px !important; }
@@ -169,7 +174,7 @@ export default function App() {
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex justify-between items-center border-b border-current/10 pb-4">
           <h1 className="text-3xl font-bold tracking-tight cursor-pointer" onClick={() => setMode("write")}>ARCHIVE</h1>
-          <nav className="flex gap-4 text-xs font-bold uppercase">
+          <nav className="flex gap-4 text-xs font-bold uppercase tracking-normal">
             <button onClick={() => setMode("write")} className={mode === "write" ? "" : "opacity-30"}>Write</button>
             <button onClick={() => setMode("archive")} className={mode === "archive" ? "" : "opacity-30"}>Read</button>
             <button onClick={() => setMode("style")} className={mode === "style" ? "" : "opacity-30"}>Set</button>
@@ -187,7 +192,7 @@ export default function App() {
               <input list="chars" placeholder="캐릭터" value={character} onChange={e => setCharacter(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm font-bold" />
             </div>
             <textarea placeholder="대사 / 문장" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: lineSize }} />
-            <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-sm opacity-70 outline-none" />
+            <textarea placeholder="코멘트 (선택)" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-sm opacity-80 outline-none" />
             <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border rounded-full text-xs font-bold hover:bg-current hover:text-[white] transition-all">SAVE</button></div>
           </div>
         )}
@@ -201,11 +206,11 @@ export default function App() {
             {Object.entries(grouped).map(([title, list]: any) => (
               <section key={title} className="space-y-1">
                 <button onClick={() => setOpenWork(openWork === title ? null : title)} className="flex items-baseline gap-2 font-bold border-b border-current/5 w-full text-left py-1">
-                  <span>{title}</span><span className="text-[10px] opacity-40">({list.length})</span>
+                  <span>{title}</span><span className="text-[10px] opacity-40 font-normal">({list.length})</span>
                 </button>
                 {openWork === title && list.map((e: any) => (
-                  <div key={e.id} className="border-l border-current/10 pl-4 py-1">
-                    <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-60 hover:opacity-100">
+                  <div key={e.id} className="border-l border-current/10 ml-1 pl-4 py-1">
+                    <button onClick={() => setOpenEntryId(openEntryId === e.id ? null : e.id)} className="w-full text-left text-[11px] opacity-70 hover:opacity-100">
                       {e.date} {e.time && `· ${e.time}`} · {e.character}
                     </button>
                     {openEntryId === e.id && (
@@ -220,7 +225,7 @@ export default function App() {
                         {e.comment && <div className="mt-2 text-xs opacity-70 border-t border-current/5 pt-1">{e.comment}</div>}
                         <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time || ""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment || ""); }}>Edit</button>
-                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
+                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500 font-bold">Delete</button>
                         </div>
                       </div>
                     )}
@@ -233,20 +238,27 @@ export default function App() {
 
         {mode === "style" && (
           <div className="space-y-6 py-4 animate-in fade-in max-w-sm">
-            <div className="space-y-1"><label className="text-[10px] uppercase opacity-50 font-bold">Colors</label>
-              <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" placeholder="Background" />
-              <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" placeholder="Text Color" />
+            <div className="space-y-1"><label className="text-[10px] uppercase font-bold opacity-50">Colors</label>
+              <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" placeholder="Background Color Code" />
+              <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" placeholder="Text Color Code" />
             </div>
-            <div className="space-y-1"><label className="text-[10px] uppercase opacity-50 font-bold">Typography</label>
+            <div className="space-y-1"><label className="text-[10px] uppercase font-bold opacity-50">Typography</label>
               <input type="range" min="12" max="24" value={lineSize} onChange={e => setLineSize(Number(e.target.value))} className="w-full accent-current mb-2" />
-              <input placeholder="Font Name" value={koreanFont} onChange={e => setKoreanFont(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 text-xs outline-none" />
-              <input placeholder="Font URL (Google Fonts 등)" value={fontLink} onChange={e => setFontLink(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 text-xs outline-none" />
+              <input placeholder="Font Name" value={koreanFont} onChange={e => setKoreanFont(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 text-xs outline-none font-bold" />
+              <input placeholder="Font URL (Google Fonts link)" value={fontLink} onChange={e => setFontLink(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 text-xs outline-none" />
             </div>
             <div className="flex items-center justify-between py-2 border-b border-current/10">
               <span className="text-xs font-bold uppercase">Night Mode</span>
               <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative transition-colors ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
               </button>
+            </div>
+            <div className="space-y-1 pt-4">
+               <label className="text-[10px] uppercase font-bold opacity-50">Export</label>
+               <div className="flex gap-4 text-xs font-bold opacity-60">
+                 <button onClick={() => exportFile("json")}>JSON</button>
+                 <button onClick={() => exportFile("txt")}>TXT</button>
+               </div>
             </div>
           </div>
         )}
