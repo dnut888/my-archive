@@ -63,9 +63,9 @@ export default function App() {
   }, [bgColor, textColor, lineSize, koreanFont, fontLink, night]);
 
   const fetchDB = async () => {
-    if (!supabase || !user) return;
+    if (!supabase || !user || user.id === 'guest') return;
     const { data } = await supabase.from("entries").select("*");
-    if (data) {
+    if (data && data.length > 0) {
       const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
       setEntries(dbEntries);
       localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
@@ -79,7 +79,7 @@ export default function App() {
     else { setUser(data.user); fetchDB(); }
   };
 
-  // 🔥 [저장 기능: 무조건 성공 로직]
+  // 🔥 [긴급 수정] 저장 후 데이터가 사라지지 않도록 fetchDB를 강제 중단함
   const save = async () => {
     if (!work || !date || !text) return alert("필수 항목을 입력해주세요.");
     
@@ -90,20 +90,22 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 1. 브라우저에 즉시 업데이트 (이게 핵심)
+    // 1. 화면 업데이트 (즉시 반영)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    // 2. DB 작업은 뒤에서 조용히 처리
+    // 2. DB 저장 (백그라운드에서 처리, 화면 갱신은 하지 않음)
     if (supabase && user && user.id !== 'guest') {
-      const task = editingId 
-        ? supabase.from("entries").update({ content: payload }).eq('id', entries.find(e => e.id === editingId).db_id)
-        : supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-      
-      task.then(() => fetchDB()).catch(err => console.error("DB Sync Error", err));
+      if (editingId) {
+        const target = entries.find(e => e.id === editingId);
+        supabase.from("entries").update({ content: payload }).eq('id', target.db_id).then(() => {});
+      } else {
+        supabase.from("entries").insert([{ content: payload, user_id: user.id }]).then(() => {});
+      }
     }
 
+    // 3. 폼 초기화 및 이동
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
     setEditingId(null); setMode("archive");
   };
@@ -131,7 +133,7 @@ export default function App() {
           <h1 className="text-3xl mb-8 font-bold tracking-tight">ARCHIVE</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-bold">LOGIN</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-bold font-sans">LOGIN</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4">GUEST MODE</button>
         </div>
       </div>
@@ -141,7 +143,7 @@ export default function App() {
   return (
     <div className="min-h-screen px-5 py-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=EB+Garamond:wght@500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&display=swap');
         @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
         .font-en { font-family: 'Playfair Display', serif !important; font-weight: 700; }
         * { letter-spacing: 0px !important; }
