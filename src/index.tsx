@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://dctinbgpmxsfyexnfvbi.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjdGluYmdwbXhzZnlleG5mdmJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkwMDU4NDQsImV4cCI6MjA4NDU4MTg0NH0.SPiNc-q-u6xHlb5H82EFvl8xBUmzuCIs8w6WS9tauyY";
+const SUPABASE_KEY = "여기에_본인의_ANON_KEY_입력";
 
 let supabase: any = null;
 try {
@@ -22,7 +22,7 @@ export default function App() {
 
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
   const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a");
-  const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 14); // 기본 사이즈 하향
+  const [lineSize, setLineSize] = useState(() => Number(localStorage.getItem("arch_size")) || 14);
   const [koreanFont, setKoreanFont] = useState(() => localStorage.getItem("arch_font") || "BookkMyungjo");
   const [fontLink, setFontLink] = useState(() => localStorage.getItem("arch_font_link") || "");
   const [night, setNight] = useState(() => localStorage.getItem("arch_night") === "true");
@@ -73,15 +73,15 @@ export default function App() {
   };
 
   const handleLogin = async () => {
-    if (!supabase) return alert("Supabase Key 확인 필요");
+    if (!supabase) return alert("Supabase 설정 확인");
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) alert("실패: " + error.message);
     else { setUser(data.user); fetchDB(); }
   };
 
-  // --- [저장 로직 강화] ---
+  // 🔥 [저장 기능: 무조건 성공 로직]
   const save = async () => {
-    if (!work || !date || !text) return alert("작품명, 날짜, 문장은 필수입니다.");
+    if (!work || !date || !text) return alert("필수 항목을 입력해주세요.");
     
     const payload = {
       work, date, time, character, text, comment,
@@ -90,22 +90,18 @@ export default function App() {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 로컬 우선 저장 (즉시 반영)
-    let nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
+    // 1. 브라우저에 즉시 업데이트 (이게 핵심)
+    const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    // DB 백그라운드 저장
+    // 2. DB 작업은 뒤에서 조용히 처리
     if (supabase && user && user.id !== 'guest') {
-      try {
-        if (editingId) {
-          const target = entries.find(e => e.id === editingId);
-          await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
-        } else {
-          await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
-        }
-        fetchDB();
-      } catch (e) { console.error("DB Save Error", e); }
+      const task = editingId 
+        ? supabase.from("entries").update({ content: payload }).eq('id', entries.find(e => e.id === editingId).db_id)
+        : supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
+      
+      task.then(() => fetchDB()).catch(err => console.error("DB Sync Error", err));
     }
 
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
@@ -130,12 +126,12 @@ export default function App() {
 
   if (!user && entries.length === 0) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: activeBg, color: activeText }}>
+      <div className="min-h-screen flex items-center justify-center font-serif" style={{ background: activeBg, color: activeText }}>
         <div className="w-64 space-y-4 text-center">
-          <h1 className="text-3xl mb-8 font-bold tracking-tight font-sans">ARCHIVE</h1>
+          <h1 className="text-3xl mb-8 font-bold tracking-tight">ARCHIVE</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-bold font-sans">LOGIN</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-bold">LOGIN</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4">GUEST MODE</button>
         </div>
       </div>
@@ -145,17 +141,17 @@ export default function App() {
   return (
     <div className="min-h-screen px-5 py-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=EB+Garamond:wght@500&display=swap');
         @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
-        .font-en { font-family: 'Inter', sans-serif !important; }
+        .font-en { font-family: 'Playfair Display', serif !important; font-weight: 700; }
         * { letter-spacing: 0px !important; }
       `}</style>
       {fontLink && <link rel="stylesheet" href={fontLink} />}
 
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex justify-between items-center border-b border-current/10 pb-4">
-          <h1 className="text-3xl font-bold tracking-tighter cursor-pointer font-en" onClick={() => setMode("write")}>ARCHIVE</h1>
-          <nav className="flex gap-4 text-xs font-bold uppercase font-en">
+          <h1 className="text-3xl tracking-tighter cursor-pointer font-en" onClick={() => setMode("write")}>Archive</h1>
+          <nav className="flex gap-4 text-xs uppercase font-en">
             <button onClick={() => setMode("write")} className={mode === "write" ? "" : "opacity-30"}>Write</button>
             <button onClick={() => setMode("archive")} className={mode === "archive" ? "" : "opacity-30"}>Read</button>
             <button onClick={() => setMode("style")} className={mode === "style" ? "" : "opacity-30"}>Set</button>
@@ -171,9 +167,9 @@ export default function App() {
               <input placeholder="키워드 (선택)" value={keywords} onChange={e => setKeywords(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
               <input placeholder="캐릭터" value={character} onChange={e => setCharacter(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm font-bold" />
             </div>
-            <textarea placeholder="문장을 입력하세요" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '0.875rem' }} />
+            <textarea placeholder="문장을 입력하세요" value={text} onChange={e => setText(e.target.value)} className="w-full h-64 py-3 bg-transparent leading-relaxed outline-none resize-none" style={{ fontSize: '14px' }} />
             <textarea placeholder="코멘트" value={comment} onChange={e => setComment(e.target.value)} className="w-full py-2 bg-transparent text-xs opacity-70 outline-none" />
-            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-bold font-en">SAVE</button></div>
+            <div className="flex justify-end"><button onClick={save} className="px-10 py-3 border border-current rounded-full text-xs font-en">Save</button></div>
           </div>
         )}
 
@@ -229,7 +225,7 @@ export default function App() {
             </div>
             <div className="flex items-center justify-between py-2 border-b border-current/10 font-en">
               <span className="text-xs font-bold uppercase">Night Mode</span>
-              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
+              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative transition-all ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
