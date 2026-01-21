@@ -15,11 +15,11 @@ try {
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [entries, setEntries] = useState<any[]>([]);
-  const [isInitialized, setIsInitialized] = useState(false); // 초기화 체크용
+  const [isInitialized, setIsInitialized] = useState(false);
   const [mode, setMode] = useState<"write" | "archive" | "style">("write");
   const [openWork, setOpenWork] = useState<string | null>(null);
   const [openEntryId, setOpenEntryId] = useState<number | null>(null);
-  const [focusEntry, setFocusEntry] = useState<any | null>(null);
+  const [focusEntry, setFocusEntry] = useState<any | null>(null); // 캡쳐용 팝업 상태
 
   const [bgColor, setBgColor] = useState(() => localStorage.getItem("arch_bg") || "#f5f5f2");
   const [textColor, setTextColor] = useState(() => localStorage.getItem("arch_text") || "#1a1a1a");
@@ -41,73 +41,45 @@ export default function App() {
 
   const [query, setQuery] = useState("");
   const [onlyFavorite, setOnlyFavorite] = useState(false);
-  const [charFilter, setCharFilter] = useState<string>("");
 
   useEffect(() => {
-    // 1. 로컬 스토리지 먼저 로드
     const local = localStorage.getItem("archive_full_backup");
-    if (local) {
-      setEntries(JSON.parse(local));
-    }
+    if (local) setEntries(JSON.parse(local));
     
-    // 2. 세션 체크
     if (supabase) {
       supabase.auth.getSession().then(({ data }: any) => {
         if (data.session?.user) {
           setUser(data.session.user);
-          fetchDB(); // 로그인 된 경우에만 DB 호출
+          fetchDB(data.session.user);
         }
-        setIsInitialized(true); // 이제 준비됨
+        setIsInitialized(true);
       });
     } else {
       setIsInitialized(true);
     }
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem("arch_bg", bgColor);
-    localStorage.setItem("arch_text", textColor);
-    localStorage.setItem("arch_size", lineSize.toString());
-    localStorage.setItem("arch_font", koreanFont);
-    localStorage.setItem("arch_font_link", fontLink);
-    localStorage.setItem("arch_night", night.toString());
-  }, [bgColor, textColor, lineSize, koreanFont, fontLink, night]);
-
-const fetchDB = async () => {
-    // 1. 접속 정보가 없거나 게스트면 실행 안 함
-    if (!supabase || !user || user.id === 'guest') return;
-
+  const fetchDB = async (currentUser = user) => {
+    if (!supabase || !currentUser || currentUser.id === 'guest') return;
     try {
-      // 2. DB에서 데이터를 읽어옵니다.
       const { data, error } = await supabase.from("entries").select("*");
-
-      // 3. 에러가 나면 콘솔에 표시
-      if (error) {
-        console.error("DB 로드 에러:", error.message);
-        return;
-      }
-
-      // 4. DB에 데이터가 있을 때만 화면을 업데이트합니다.
-      // (이렇게 해야 브라우저마다 달랐던 내용이 하나로 합쳐집니다)
-      if (data && data.length > 0) {
+      if (!error && data && data.length > 0) {
         const dbEntries = data.map((d: any) => ({ ...d.content, db_id: d.id }));
         setEntries(dbEntries);
         localStorage.setItem("archive_full_backup", JSON.stringify(dbEntries));
       }
-    } catch (err) {
-      console.error("연결 오류:", err);
-    }
-  };;
+    } catch (e) { console.error(e); }
+  };
 
   const handleLogin = async () => {
     if (!supabase) return alert("Supabase 설정 확인");
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) alert("실패: " + error.message);
-    else { setUser(data.user); fetchDB(); }
+    else { setUser(data.user); fetchDB(data.user); }
   };
 
   const save = async () => {
-    if (!work || !date || !text) return alert("필수 항목을 입력해주세요.");
+    if (!work || !date || !text) return alert("작품명, 날짜, 문장은 필수입니다.");
     
     const payload = {
       work, date, time, character, text, comment,
@@ -116,22 +88,18 @@ const fetchDB = async () => {
       favorite: editingId ? (entries.find(e => e.id === editingId)?.favorite || false) : false
     };
 
-    // 1. 화면 업데이트 (즉시 반영 및 로컬 저장)
     const nextEntries = editingId ? entries.map(e => e.id === editingId ? payload : e) : [payload, ...entries];
     setEntries(nextEntries);
     localStorage.setItem("archive_full_backup", JSON.stringify(nextEntries));
 
-    // 2. DB 저장 (백그라운드 처리, fetchDB로 화면 덮어쓰기 금지)
     if (supabase && user && user.id !== 'guest') {
       if (editingId) {
         const target = entries.find(e => e.id === editingId);
-        supabase.from("entries").update({ content: payload }).eq('id', target.db_id).then(() => {});
+        await supabase.from("entries").update({ content: payload }).eq('id', target.db_id);
       } else {
-        supabase.from("entries").insert([{ content: payload, user_id: user.id }]).then((res) => {
-          // 새로 만든 데이터의 db_id만 조용히 업데이트
-          if (res.data) fetchDB();
-        });
+        await supabase.from("entries").insert([{ content: payload, user_id: user.id }]);
       }
+      fetchDB();
     }
 
     setWork(""); setDate(""); setTime(""); setKeywords(""); setCharacter(""); setText(""); setComment("");
@@ -141,7 +109,6 @@ const fetchDB = async () => {
   const grouped = useMemo(() => {
     let base = [...entries].sort((a, b) => b.id - a.id);
     if (onlyFavorite) base = base.filter(e => e.favorite);
-    if (charFilter) base = base.filter(e => e.character === charFilter);
     if (query) base = base.filter(e => [e.text, e.work, e.character].some(v => v?.toLowerCase().includes(query.toLowerCase())));
     
     return base.reduce((acc: any, cur) => {
@@ -149,22 +116,21 @@ const fetchDB = async () => {
       acc[cur.work].push(cur);
       return acc;
     }, {});
-  }, [entries, query, onlyFavorite, charFilter]);
+  }, [entries, query, onlyFavorite]);
 
   const activeBg = night ? "#1a1a1a" : bgColor;
   const activeText = night ? "#e5e5e5" : textColor;
 
-  // 로그인 화면 조건 수정: 초기화 전에는 아무것도 안보여줌, 초기화 후 유저 없으면 로그인창 고정
   if (!isInitialized) return null;
 
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center font-serif" style={{ background: activeBg, color: activeText }}>
-        <div className="w-64 space-y-4 text-center animate-in fade-in">
-          <h1 className="text-3xl mb-8 font-bold tracking-tight">ARCHIVE</h1>
+        <div className="w-64 space-y-4 text-center">
+          <h1 className="text-3xl mb-8 font-normal tracking-tight font-en">Archive</h1>
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
           <input className="w-full bg-transparent border-b border-current/20 py-2 outline-none text-center" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} />
-          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-bold font-sans">LOGIN</button>
+          <button onClick={handleLogin} className="w-full mt-4 border border-current rounded-full py-2 text-xs font-en">Login</button>
           <button onClick={() => setUser({id:'guest'})} className="text-[10px] opacity-40 underline mt-4">GUEST MODE</button>
         </div>
       </div>
@@ -174,9 +140,9 @@ const fetchDB = async () => {
   return (
     <div className="min-h-screen px-5 py-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400&display=swap');
         @font-face { font-family: 'BookkMyungjo'; src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2302@1.0/BookkMyungjo-Lt.woff2') format('woff2'); }
-        .font-en { font-family: 'Playfair Display', serif !important; font-weight: 700; }
+        .font-en { font-family: 'Crimson Text', serif !important; font-weight: 400 !important; }
         * { letter-spacing: 0px !important; }
       `}</style>
       {fontLink && <link rel="stylesheet" href={fontLink} />}
@@ -184,7 +150,7 @@ const fetchDB = async () => {
       <div className="max-w-4xl mx-auto space-y-6">
         <header className="flex justify-between items-center border-b border-current/10 pb-4">
           <h1 className="text-3xl tracking-tighter cursor-pointer font-en" onClick={() => setMode("write")}>Archive</h1>
-          <nav className="flex gap-4 text-xs uppercase font-en">
+          <nav className="flex gap-4 text-sm font-en">
             <button onClick={() => setMode("write")} className={mode === "write" ? "" : "opacity-30"}>Write</button>
             <button onClick={() => setMode("archive")} className={mode === "archive" ? "" : "opacity-30"}>Read</button>
             <button onClick={() => setMode("style")} className={mode === "style" ? "" : "opacity-30"}>Set</button>
@@ -192,7 +158,7 @@ const fetchDB = async () => {
         </header>
 
         {mode === "write" && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4">
             <input placeholder="작품명" value={work} onChange={e => setWork(e.target.value)} className="w-full py-3 border-b bg-transparent font-bold text-xl outline-none" />
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <input placeholder="날짜 / 페이지" value={date} onChange={e => setDate(e.target.value)} className="border-b bg-transparent py-2 outline-none text-sm" />
@@ -207,7 +173,7 @@ const fetchDB = async () => {
         )}
 
         {mode === "archive" && (
-          <div className="space-y-4 animate-in fade-in">
+          <div className="space-y-4">
             <div className="flex gap-3 items-center border-b border-current/5 pb-2">
               <input placeholder="Search..." value={query} onChange={e => setQuery(e.target.value)} className="flex-1 bg-transparent py-1 outline-none text-sm" />
               <button onClick={() => setOnlyFavorite(!onlyFavorite)} className={onlyFavorite ? "text-yellow-500" : "opacity-20"}>★</button>
@@ -234,7 +200,7 @@ const fetchDB = async () => {
                         {e.comment && <div className="mt-2 text-xs opacity-70 border-t border-current/5 pt-1">{e.comment}</div>}
                         <div className="flex gap-4 mt-2 text-[10px] opacity-40 font-bold uppercase font-en">
                           <button onClick={() => { setMode("write"); setEditingId(e.id); setWork(e.work); setDate(e.date); setTime(e.time || ""); setKeywords(e.keywords.join(", ")); setCharacter(e.character); setText(e.text); setComment(e.comment || ""); }}>Edit</button>
-                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500 font-bold">Delete</button>
+                          <button onClick={() => setEntries(p => p.filter(x => x.id !== e.id))} className="text-red-500">Delete</button>
                         </div>
                       </div>
                     )}
@@ -246,7 +212,7 @@ const fetchDB = async () => {
         )}
 
         {mode === "style" && (
-          <div className="space-y-6 py-4 animate-in fade-in max-w-sm">
+          <div className="space-y-6 py-4 max-w-sm">
             <div className="space-y-1 font-en"><label className="text-[10px] uppercase font-bold opacity-50">Colors</label>
               <input value={bgColor} onChange={e => setBgColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" />
               <input value={textColor} onChange={e => setTextColor(e.target.value)} className="w-full bg-transparent border-b border-current/20 py-1 outline-none font-mono text-xs" />
@@ -258,17 +224,27 @@ const fetchDB = async () => {
             </div>
             <div className="flex items-center justify-between py-2 border-b border-current/10 font-en">
               <span className="text-xs font-bold uppercase">Night Mode</span>
-              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative transition-all ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
+              <button onClick={() => setNight(!night)} className={`w-10 h-5 rounded-full relative ${night ? 'bg-blue-500' : 'bg-gray-300'}`}>
                 <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${night ? 'left-6' : 'left-1'}`} />
               </button>
             </div>
           </div>
         )}
       </div>
+
+      {/* 캡쳐용 팝업 (문장 클릭 시 나타남) */}
+      {focusEntry && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6" onClick={() => setFocusEntry(null)}>
+          <div className="max-w-lg w-full p-10 shadow-2xl space-y-6" style={{ backgroundColor: activeBg, color: activeText, fontFamily: koreanFont }}>
+            <div className="text-xs opacity-50 font-en border-b border-current/10 pb-2">{focusEntry.work} / {focusEntry.character}</div>
+            <div className="leading-relaxed whitespace-pre-wrap" style={{ fontSize: lineSize + 4 }}>{focusEntry.text}</div>
+            <div className="text-[10px] opacity-30 text-right font-en italic">Archive.</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 root.render(<App />);
-
